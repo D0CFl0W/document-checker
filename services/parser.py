@@ -104,7 +104,8 @@ def parse_document(path: Path) -> dict:
     return result
 
 
-def parse_directory(directory: str, limit: int | None = 5):
+def parse_directory(directory: str, limit: int = 5):
+
     directory = Path(directory)
 
     if not directory.exists():
@@ -131,3 +132,12 @@ def parse_directory(directory: str, limit: int | None = 5):
             })
 
     return results
+
+def res(path: str):
+    qwe = parse_directory("unpacked/154eb62b-09f2-425d-8c24-fe345223f3b4_documents_bundle")
+    print(qwe)
+    return qwe
+
+if __name__ == "__main__":
+    res = parse_directory("unpacked/154eb62b-09f2-425d-8c24-fe345223f3b4_documents_bundle")
+    print(res)

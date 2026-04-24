@@ -3,8 +3,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pathlib import Path
 from schemas.archive import FileDownloadRequest
+from services.parser import parse_directory
+from services.unpacker import outputing_file
 
 UPLOAD_DIR = Path("files")
+DOWNLOAD_DIR = Path("unpacked")
 
 router = APIRouter(
     prefix="/download-report",
@@ -12,22 +15,21 @@ router = APIRouter(
 )
 
 @router.post("")
-async def download_report(request_data: FileDownloadRequest):
+async def get_report_info(request_data: FileDownloadRequest):
     try:
-        # Ищем файл на сервере именно по saved_name (уникальному имени)
-        file_path = UPLOAD_DIR / request_data.saved_name
-
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail="Файл не найден на сервере")
-
-        return FileResponse(
-            path=file_path,
-            # Можно вернуть файл под его оригинальным именем
-            filename=request_data.original_name,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+        # Ищем файл на сервере по сохраненному имени
+        name = request_data.saved_name
+        file_path = UPLOAD_DIR / name
+        s = outputing_file(file_path, DOWNLOAD_DIR)
+        return {
+            "status": "success",
+            "file1": s[0],
+            "file2": s[1],
+            "file3": s[2],
+            "file4": s[3],
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при отдаче файла: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при проверке файла: {str(e)}")
