@@ -134,10 +134,4 @@ def parse_directory(directory: str, limit: int = 5):
     return results
 
 def res(path: str):
-    qwe = parse_directory("unpacked/154eb62b-09f2-425d-8c24-fe345223f3b4_documents_bundle")
-    print(qwe)
-    return qwe
-
-if __name__ == "__main__":
-    res = parse_directory("unpacked/154eb62b-09f2-425d-8c24-fe345223f3b4_documents_bundle")
-    print(res)
+    return parse_directory(path)
