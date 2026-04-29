@@ -1,7 +1,25 @@
 import re
 from pathlib import Path
 from docx import Document
+import pdfplumber
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+BASE_DIR = Path(__file__).resolve().parent.parent
 
+FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
+def extract_pdf(path: Path) -> str:
+    try:
+        text_parts = []
+
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text_parts.append(page.extract_text() or "")
+
+        return "\n".join(text_parts)
+
+    except Exception as e:
+        raise ValueError(f"Ошибка чтения PDF {path}: {e}")
 
 def extract_docx(path: Path) -> str:
     try:
@@ -11,6 +29,13 @@ def extract_docx(path: Path) -> str:
 
     return "\n".join(p.text for p in doc.paragraphs if p.text)
 
+def extract_text(path: Path) -> str:
+    if path.suffix.lower() == ".docx":
+        return extract_docx(path)
+    elif path.suffix.lower() == ".pdf":
+        return extract_pdf(path)
+    else:
+        raise ValueError(f"Неподдерживаемый формат файла: {path.suffix}")
 
 def normalize_text(text: str) -> str:
     text = text.replace('\xa0', ' ')
@@ -86,7 +111,7 @@ def extract_topic(raw_text: str):
 
 
 def parse_document(path: Path) -> dict:
-    raw_text = extract_docx(path)
+    raw_text = extract_text(path)
     text = normalize_text(raw_text)
 
     result = {}
@@ -110,7 +135,7 @@ def parse_directory(directory: str, limit: int | None = 5):
     if not directory.exists():
         raise ValueError(f"Директория не существует: {directory}")
 
-    files = sorted(directory.glob("*.docx"))
+    files = sorted(list(directory.glob("*.docx")) + list(directory.glob("*.pdf")))
 
     if limit:
         files = files[:limit]
@@ -131,3 +156,37 @@ def parse_directory(directory: str, limit: int | None = 5):
             })
 
     return results
+
+
+def generate_pdf_report(results: list, output_path: str):
+    c = canvas.Canvas(output_path)
+
+    pdfmetrics.registerFont(TTFont("DejaVu", str(FONT_PATH)))
+    c.setFont("DejaVu", 9)
+
+    y = 800
+
+    for item in results:
+
+        if y < 100:
+            c.showPage()
+            c.setFont("DejaVu", 9)
+            y = 800
+
+        if "error" in item:
+            c.drawString(50, y, f"{item['file']} — ОШИБКА: {item['error']}")
+            y -= 10
+            continue
+
+        data = item["data"]
+
+        c.drawString(10, y, f"Файл: {item['file']}")
+        y -= 10
+
+        for key, value in data.items():
+            c.drawString(20, y, f"{key}: {value if value else '—'}")
+            y -= 10
+
+        y -= 9
+
+    c.save()
