@@ -122,13 +122,20 @@
     checkBtn.textContent = "⌛ Упаковка и отправка...";
 
     try {
+      // Расширение в имени в ZIP должно совпадать с реальным файлом (иначе бэкенд видел .docx при PDF).
+      function zipExt(file) {
+        const n = (file && file.name) ? file.name.toLowerCase() : "";
+        if (n.endsWith(".pdf")) return "pdf";
+        if (n.endsWith(".docx")) return "docx";
+        return "docx";
+      }
       // Создаем ZIP архив
       const zip = new JSZip();
-      zip.file("1_title.docx", selectedFiles.title);
-      zip.file("2_task.docx", selectedFiles.task);
-      zip.file("3_review.docx", selectedFiles.review);
-      zip.file("4_norm.docx", selectedFiles.norm);
-      zip.file("5_antiplag.pdf", selectedFiles.antiplag);
+      zip.file(`1_title.${zipExt(selectedFiles.title)}`, selectedFiles.title);
+      zip.file(`2_task.${zipExt(selectedFiles.task)}`, selectedFiles.task);
+      zip.file(`3_review.${zipExt(selectedFiles.review)}`, selectedFiles.review);
+      zip.file(`4_norm.${zipExt(selectedFiles.norm)}`, selectedFiles.norm);
+      zip.file(`5_antiplag.${zipExt(selectedFiles.antiplag)}`, selectedFiles.antiplag);
 
       // Генерируем архив в виде Blob
       const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -196,7 +203,7 @@
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `Report_Normokontrol_${new Date().toISOString().slice(0, 10)}.docx`;
+      a.download = `Report_Normokontrol_${new Date().toISOString().slice(0, 10)}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
