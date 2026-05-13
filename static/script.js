@@ -3,7 +3,6 @@
 
   // Настройки адресов бэкенда
   const CONFIG = {
-    API_URL: "http://127.0.0.1:8000",
     ENDPOINTS: {
       UPLOAD_ZIP: "/upload-archive", // Эндпоинт для приема ZIP-архива
       DOWNLOAD: "/download-report", // Эндпоинт для скачивания отчета
@@ -124,7 +123,7 @@
     try {
       // Расширение в имени в ZIP должно совпадать с реальным файлом (иначе бэкенд видел .docx при PDF).
       function zipExt(file) {
-        const n = (file && file.name) ? file.name.toLowerCase() : "";
+        const n = file && file.name ? file.name.toLowerCase() : "";
         if (n.endsWith(".pdf")) return "pdf";
         if (n.endsWith(".docx")) return "docx";
         return "docx";
@@ -133,9 +132,15 @@
       const zip = new JSZip();
       zip.file(`1_title.${zipExt(selectedFiles.title)}`, selectedFiles.title);
       zip.file(`2_task.${zipExt(selectedFiles.task)}`, selectedFiles.task);
-      zip.file(`3_review.${zipExt(selectedFiles.review)}`, selectedFiles.review);
+      zip.file(
+        `3_review.${zipExt(selectedFiles.review)}`,
+        selectedFiles.review,
+      );
       zip.file(`4_norm.${zipExt(selectedFiles.norm)}`, selectedFiles.norm);
-      zip.file(`5_antiplag.${zipExt(selectedFiles.antiplag)}`, selectedFiles.antiplag);
+      zip.file(
+        `5_antiplag.${zipExt(selectedFiles.antiplag)}`,
+        selectedFiles.antiplag,
+      );
 
       // Генерируем архив в виде Blob
       const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -145,13 +150,10 @@
       formData.append("archive", zipBlob, "documents_bundle.zip");
 
       // Fetch запрос
-      const response = await fetch(
-        `${CONFIG.API_URL}${CONFIG.ENDPOINTS.UPLOAD_ZIP}`,
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
+      const response = await fetch(`${CONFIG.ENDPOINTS.UPLOAD_ZIP}`, {
+        method: "POST",
+        body: formData,
+      });
 
       if (!response.ok) throw new Error("Ошибка сервера");
 
@@ -185,17 +187,14 @@
     }
 
     try {
-      const response = await fetch(
-        `${CONFIG.API_URL}${CONFIG.ENDPOINTS.DOWNLOAD}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          // 4. Отправляем те самые сохраненные данные
-          body: JSON.stringify(uploadedFileInfo),
+      const response = await fetch(`${CONFIG.ENDPOINTS.DOWNLOAD}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
-      );
+        // 4. Отправляем те самые сохраненные данные
+        body: JSON.stringify(uploadedFileInfo),
+      });
 
       if (!response.ok) throw new Error("Файл не найден на сервере");
 
