@@ -10,6 +10,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
+from collections import defaultdict
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
 
@@ -168,12 +170,64 @@ def parse_directory(directory: str | Path, limit: int = 5) -> list[dict[str, Any
     return results
 
 
+KEY_FIELDS = ["ФИО", "Группа", "Тема", "Дата"]
+
+
+def normalize_compare_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def evaluate_completeness(
+    results: list[dict[str, Any]],
+) -> tuple[bool, dict[str, set[str | None]]]:
+
+    field_values: dict[str, set[str | None]] = defaultdict(set)
+
+    for item in results:
+        if "error" in item:
+            continue
+
+        for field in KEY_FIELDS:
+            value = normalize_compare_value(item["data"].get(field))
+            field_values[field].add(value)
+
+    inconsistencies: dict[str, set[str | None]] = {}
+
+    for field, values in field_values.items():
+        if len(values) > 1:
+            inconsistencies[field] = values
+
+    return len(inconsistencies) == 0, inconsistencies
+
+
 def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None:
     pdf_canvas = canvas.Canvas(output_path)
     pdfmetrics.registerFont(TTFont("DejaVu", str(FONT_PATH)))
     pdf_canvas.setFont("DejaVu", 9)
 
+    is_complete, inconsistencies = evaluate_completeness(results)
+
     y_position = 800
+
+
+    status = "КОМПЛЕКТ" if is_complete else "НЕ КОМПЛЕКТ"
+    pdf_canvas.drawString(50, y_position, f"Статус набора: {status}")
+    y_position -= 15
+
+    if inconsistencies:
+        pdf_canvas.drawString(50, y_position, "Несоответствия:")
+        y_position -= 10
+
+        for field, values in inconsistencies.items():
+            readable = [v if v is not None else "—" for v in values]
+            pdf_canvas.drawString(60, y_position, f"{field}: {', '.join(readable)}")
+            y_position -= 10
+
+        y_position -= 10
+
+
     for item in results:
         if y_position < 100:
             pdf_canvas.showPage()
@@ -182,21 +236,20 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
 
         if "error" in item:
             pdf_canvas.drawString(
-                50,
-                y_position,
-                f"{item['file']} — ОШИБКА: {item['error']}",
+                50, y_position, f"{item['file']} — ОШИБКА: {item['error']}"
             )
             y_position -= 10
             continue
 
-        data = item["data"]
         pdf_canvas.drawString(10, y_position, f"Файл: {item['file']}")
         y_position -= 10
 
-        for key, value in data.items():
+        for key, value in item["data"].items():
             display = value if value else "—"
             pdf_canvas.drawString(20, y_position, f"{key}: {display}")
             y_position -= 10
-        y_position -= 9
+
+        y_position -= 8
 
     pdf_canvas.save()
+
