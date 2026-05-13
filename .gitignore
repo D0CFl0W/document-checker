@@ -10,6 +10,17 @@ __pycache__/
 
 parcer
 
+<<<<<<< HEAD
+*.pdf
+*.docx
+*.doc
+*.idea
+*.png
+*.jpg
+*.jpeg
+*.zip
+=======
 files
 aaaaaa
 .idea
+>>>>>>> 4726b08e09de2d4fc63108868e6f37cf74ecc6e9
