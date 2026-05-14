@@ -3,237 +3,246 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <link rel="stylesheet" href="static/style.css" />
+        <title>Нормоконтроль · Проверка документов</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-        <script src="static/script.js" defer></script>
-        <title>Проверка документов · Нормоконтроль</title>
+        <script src="/static/script.js" defer></script>
+        <link rel="stylesheet" href="/static/style.css" />
     </head>
     <body>
         <div class="app">
-            <!-- навигация (3 страницы) -->
+            <!-- НАВИГАЦИЯ (меняется после авторизации) -->
             <nav>
-                <a href="#" class="nav-link active" data-page="page1"
-                    >📄 Загрузка и проверка</a
+                <a href="#" class="nav-link active" data-page="page-home"
+                    >Главная</a
                 >
-                <a href="#" class="nav-link" data-page="page2">📊 Отчёт</a>
-                <a href="#" class="nav-link" data-page="page3">ℹ️ О сервисе</a>
+                <a href="#" class="nav-link" data-page="page-report">Отчёт</a>
+                <a href="#" class="nav-link" data-page="page-about"
+                    >О сервисе</a
+                >
+                <a href="#" class="nav-link" data-page="page-auth"
+                    >Авторизация</a
+                >
+                <!-- кнопка для нормоконтролёра (скрыта по умолчанию) -->
+                <a
+                    href="#"
+                    class="nav-link"
+                    id="adminDbLink"
+                    data-page="page-db"
+                    style="display: none"
+                    >База</a
+                >
             </nav>
 
-            <!-- СТРАНИЦА 1 — загрузка 5 документов + уведомления о проблемах -->
-            <div id="page1" class="page">
-                <h2>📂 Загрузите документы</h2>
-                <p
-                    style="
-                        margin-top: -10px;
-                        color: #475569;
-                        margin-bottom: 20px;
-                    "
-                >
-                    Титульный лист, задание, отзыв руководителя, лист
-                    нормоконтроля, справка об антиплагиате
+            <!-- 1. ГЛАВНАЯ (теперь здесь обе формы загрузки) -->
+            <div id="page-home" class="page active">
+                <h2>Проверка документов</h2>
+                <p class="subtitle">
+                    Загрузите комплект документов для нормоконтроля, проверки
+                    шаблонов и антиплагиата
                 </p>
 
-                <div class="upload-grid">
-                    <!-- 1. Титульный лист -->
-                    <div class="doc-row" id="doc1-row">
-                        <span class="doc-label"
-                            >📌 Титульный лист <small>.docx / .pdf</small></span
-                        >
-                        <label class="upload-btn" for="file-title"
-                            >📤 Выбрать файл</label
-                        >
-                        <input
-                            type="file"
-                            id="file-title"
-                            accept=".pdf,.docx"
-                            style="display: none"
-                        />
-                        <span class="file-name" id="title-name"
-                            >файл не выбран</span
-                        >
-                        <span class="status-badge" id="title-status"
-                            >⏳ ожидает</span
-                        >
+                <!-- блок загрузки архивом -->
+                <div class="upload-section">
+                    <h3>📦 Загрузка архивом</h3>
+                    <div class="archive-upload-area">
+                        <input type="file" id="archiveInput" accept=".zip" />
+                        <label for="archiveInput">Выберите .zip архив</label>
+                        <p id="archive-name" class="file-hint">
+                            архив не выбран
+                        </p>
                     </div>
-                    <!-- 2. Задание -->
-                    <div class="doc-row" id="doc2-row">
-                        <span class="doc-label"
-                            >📋 Задание <small>.docx / .pdf</small></span
-                        >
-                        <label class="upload-btn" for="file-task"
-                            >📤 Выбрать файл</label
-                        >
-                        <input
-                            type="file"
-                            id="file-task"
-                            accept=".pdf,.docx"
-                            style="display: none"
-                        />
-                        <span class="file-name" id="task-name"
-                            >файл не выбран</span
-                        >
-                        <span class="status-badge" id="task-status"
-                            >⏳ ожидает</span
-                        >
-                    </div>
-                    <!-- 3. Отзыв руководителя -->
-                    <div class="doc-row" id="doc3-row">
-                        <span class="doc-label"
-                            >📝 Отзыв руководителя
-                            <small>.docx / .pdf</small></span
-                        >
-                        <label class="upload-btn" for="file-review"
-                            >📤 Выбрать файл</label
-                        >
-                        <input
-                            type="file"
-                            id="file-review"
-                            accept=".pdf,.docx"
-                            style="display: none"
-                        />
-                        <span class="file-name" id="review-name"
-                            >файл не выбран</span
-                        >
-                        <span class="status-badge" id="review-status"
-                            >⏳ ожидает</span
-                        >
-                    </div>
-                    <!-- 4. Лист нормоконтроля -->
-                    <div class="doc-row" id="doc4-row">
-                        <span class="doc-label"
-                            >✅ Лист нормоконтроля
-                            <small>.docx / .pdf</small></span
-                        >
-                        <label class="upload-btn" for="file-norm"
-                            >📤 Выбрать файл</label
-                        >
-                        <input
-                            type="file"
-                            id="file-norm"
-                            accept=".pdf,.docx"
-                            style="display: none"
-                        />
-                        <span class="file-name" id="norm-name"
-                            >файл не выбран</span
-                        >
-                        <span class="status-badge" id="norm-status"
-                            >⏳ ожидает</span
-                        >
-                    </div>
-                    <!-- 5. Справка об антиплагиате -->
-                    <div class="doc-row" id="doc5-row">
-                        <span class="doc-label"
-                            >🔍 Справка об антиплагиате
-                            <small>.pdf / .docx</small></span
-                        >
-                        <label class="upload-btn" for="file-antiplag"
-                            >📤 Выбрать файл</label
-                        >
-                        <input
-                            type="file"
-                            id="file-antiplag"
-                            accept=".pdf,.docx"
-                            style="display: none"
-                        />
-                        <span class="file-name" id="antiplag-name"
-                            >файл не выбран</span
-                        >
-                        <span class="status-badge" id="antiplag-status"
-                            >⏳ ожидает</span
-                        >
-                    </div>
-                </div>
-
-                <!-- Кнопка "Проверить" (имитация проверки) -->
-                <div style="display: flex; justify-content: flex-end">
-                    <button class="check-all-btn" id="checkBtn">
-                        🔎 Проверить все документы
+                    <button class="btn-primary" id="checkArchiveBtn">
+                        Проверить архив
                     </button>
-                </div>
-
-                <!-- БЛОК УВЕДОМЛЕНИЙ — если не проходит проверку, на этой же странице выводим проблемы -->
-                <div
-                    id="notificationArea"
-                    class="alert-area"
-                    style="display: none"
-                >
-                    <strong>⚠️ Проблемы при проверке:</strong>
-                    <ul id="errorList"></ul>
-                </div>
-                <div
-                    id="successMessage"
-                    style="
-                        margin-top: 20px;
-                        color: #1f7a4a;
-                        font-weight: 500;
-                        display: none;
-                    "
-                >
-                    ✅ Все документы прошли базовую проверку! Можно перейти к
-                    отчёту.
-                </div>
-
-                <!-- невидимое пояснение: бэкенд/ML вернут детали, тут фронт-заглушка -->
-            </div>
-
-            <!-- СТРАНИЦА 2 — скачать отчёт -->
-            <div id="page2" class="page hidden">
-                <h2>📑 Итоговый отчёт проверки</h2>
-                <div class="report-container">
-                    <div class="report-placeholder">
-                        <p style="font-size: 1.2rem">
-                            📋 Отчёт о соответствии стандартам
-                        </p>
-                        <p style="color: #334e77">
-                            Здесь будет сводка по заполненности полей, ключевым
-                            словам и нормоконтролю.
-                        </p>
-                        <p
-                            style="
-                                background: #d9e2f0;
-                                padding: 12px;
-                                border-radius: 30px;
-                                display: inline-block;
-                            "
-                        >
-                            Статус:
-                            <span id="reportStatus">ожидает проверки</span>
-                        </p>
+                    <div class="alert-area" id="archiveAlert">
+                        <strong>Проблемы:</strong>
+                        <ul id="archiveErrorList"></ul>
                     </div>
-                    <!-- КНОПКА СКАЧАТЬ ОТЧЁТ (основное требование) -->
-                    <button id="downloadReportBtn" class="download-btn">
-                        ⬇️ Скачать отчёт (.docx)
+                    <div class="success-message" id="archiveSuccess">
+                        ✅ Архив проверен, можно перейти к отчёту.
+                    </div>
+                </div>
+
+                <hr class="section-divider" />
+
+                <!-- блок загрузки отдельными файлами -->
+                <div class="upload-section">
+                    <h3>📄 Загрузка отдельными файлами</h3>
+                    <div class="upload-grid">
+                        <div class="doc-row">
+                            <span class="doc-label">Титульный лист</span
+                            ><label class="upload-btn" for="file-title"
+                                >Выбрать</label
+                            ><input
+                                type="file"
+                                id="file-title"
+                                accept=".pdf,.docx"
+                                style="display: none"
+                            /><span class="file-name" id="title-name"
+                                >файл не выбран</span
+                            ><span class="status-badge" id="title-status"
+                                >ожидает</span
+                            >
+                        </div>
+                        <div class="doc-row">
+                            <span class="doc-label">Задание</span
+                            ><label class="upload-btn" for="file-task"
+                                >Выбрать</label
+                            ><input
+                                type="file"
+                                id="file-task"
+                                accept=".pdf,.docx"
+                                style="display: none"
+                            /><span class="file-name" id="task-name"
+                                >файл не выбран</span
+                            ><span class="status-badge" id="task-status"
+                                >ожидает</span
+                            >
+                        </div>
+                        <div class="doc-row">
+                            <span class="doc-label">Отзыв руководителя</span
+                            ><label class="upload-btn" for="file-review"
+                                >Выбрать</label
+                            ><input
+                                type="file"
+                                id="file-review"
+                                accept=".pdf,.docx"
+                                style="display: none"
+                            /><span class="file-name" id="review-name"
+                                >файл не выбран</span
+                            ><span class="status-badge" id="review-status"
+                                >ожидает</span
+                            >
+                        </div>
+                        <div class="doc-row">
+                            <span class="doc-label">Лист нормоконтроля</span
+                            ><label class="upload-btn" for="file-norm"
+                                >Выбрать</label
+                            ><input
+                                type="file"
+                                id="file-norm"
+                                accept=".pdf,.docx"
+                                style="display: none"
+                            /><span class="file-name" id="norm-name"
+                                >файл не выбран</span
+                            ><span class="status-badge" id="norm-status"
+                                >ожидает</span
+                            >
+                        </div>
+                        <div class="doc-row">
+                            <span class="doc-label"
+                                >Справка об антиплагиате</span
+                            ><label class="upload-btn" for="file-antiplag"
+                                >Выбрать</label
+                            ><input
+                                type="file"
+                                id="file-antiplag"
+                                accept=".pdf,.docx"
+                                style="display: none"
+                            /><span class="file-name" id="antiplag-name"
+                                >файл не выбран</span
+                            ><span class="status-badge" id="antiplag-status"
+                                >ожидает</span
+                            >
+                        </div>
+                    </div>
+                    <button class="btn-primary" id="checkFilesBtn">
+                        Проверить все документы
                     </button>
-                    <p
-                        style="
-                            margin-top: 16px;
-                            font-size: 0.9rem;
-                            color: #4a5f7a;
-                        "
-                    >
-                        * Отчёт формируется после успешной проверки на странице
-                        1
-                    </p>
+                    <div class="alert-area" id="filesAlert">
+                        <strong>Проблемы при проверке:</strong>
+                        <ul id="filesErrorList"></ul>
+                    </div>
+                    <div class="success-message" id="filesSuccess">
+                        ✅ Все документы прошли базовую проверку!
+                    </div>
                 </div>
             </div>
 
-            <!-- СТРАНИЦА 3 — просто информационная (можно убрать, но в условии 3 страницы) -->
-            <div id="page3" class="page hidden">
-                <h2>ℹ️ О системе</h2>
+            <!-- 2. СТРАНИЦА ЗАГРУЗКИ (оставлена для совместимости, но на главной уже есть всё) -->
+            <div id="page-upload" class="page">
+                <h2>Загрузка документов</h2>
+                <p class="subtitle">
+                    Вы можете загрузить архив или отдельные файлы на главной
+                    странице.
+                </p>
                 <div class="info-card">
                     <p>
-                        <strong>Нормоконтроль · v0</strong><br />Сервис
-                        проверяет документы на соответствие шаблонам: поля
-                        «ФИО», «Тема» и другие ключевые слова.
+                        ↻ Вернитесь на <strong>Главную</strong>, чтобы выбрать
+                        удобный способ загрузки.
+                    </p>
+                </div>
+            </div>
+
+            <!-- 3. СТРАНИЦА ОТЧЁТА -->
+            <div id="page-report" class="page">
+                <h2>Итоговый отчёт проверки</h2>
+                <div class="info-card" style="text-align: center">
+                    <p>
+                        Сводка по заполненности полей, ключевым словам,
+                        нормоконтролю.
+                    </p>
+                    <p class="status-pill">
+                        Статус: <span id="reportStatus">ожидает проверки</span>
+                    </p>
+                    <button id="downloadReportBtn" class="download-btn">
+                        Скачать отчёт (.docx)
+                    </button>
+                    <p class="note">
+                        * Отчёт формируется после успешной проверки на главной
+                        странице
+                    </p>
+                </div>
+            </div>
+
+            <!-- 4. О СЕРВИСЕ (перенесён в конец меню) -->
+            <div id="page-about" class="page">
+                <h2>О сервисе нормоконтроля</h2>
+                <div class="info-card">
+                    <p>
+                        <strong>Нормоконтроль</strong> — сервис проверки
+                        документов на соответствие шаблонам.
                     </p>
                     <p>
-                        📌 Бэкенд: Python FastAPI + Docker<br />📌 ML: docx,
-                        pdfplumber<br />📌 Фронтенд: HTML, CSS, JavaScript.
+                        Бэкенд: Python FastAPI + Docker | Анализ: docx,
+                        pdfplumber
                     </p>
-                    <p style="margin-top: 20px">
-                        💡 На первой странице загрузите 5 файлов, нажмите
-                        «Проверить». При ошибках уведомления появятся там же. На
-                        второй странице — скачивание отчёта.
+                </div>
+            </div>
+
+            <!-- 5. АВТОРИЗАЦИЯ (серьёзная) -->
+            <div id="page-auth" class="page">
+                <h2>Авторизация</h2>
+                <div class="auth-form">
+                    <label for="loginEmail">Электронная почта</label>
+                    <input
+                        type="email"
+                        id="loginEmail"
+                        placeholder="user@university.ru"
+                    />
+                    <label for="loginPassword">Пароль</label>
+                    <input
+                        type="password"
+                        id="loginPassword"
+                        placeholder="••••••••"
+                    />
+                    <button class="btn-primary" id="loginBtn">Войти</button>
+                    <p class="demo-note">
+                        Демо-режим: нажмите «Войти» — если email содержит
+                        @normocontrol, появится кнопка «База».
+                    </p>
+                    <p id="authMessage" class="auth-message"></p>
+                </div>
+            </div>
+
+            <!-- 6. БАЗА (только для нормоконтролёра) -->
+            <div id="page-db" class="page">
+                <h2>База данных / Архив проверок</h2>
+                <div class="info-card">
+                    <p><strong>Доступно только нормоконтролёру</strong></p>
+                    <p>
+                        Здесь будет история проверок и доступ к предыдущим
+                        отчётам.
                     </p>
                 </div>
             </div>
