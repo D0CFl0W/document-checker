@@ -4,6 +4,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+import fitz
+import pytesseract
+from PIL import Image
+from pathlib import Path
 import pdfplumber
 from docx import Document
 from reportlab.pdfbase import pdfmetrics
@@ -39,16 +43,32 @@ def _detect_format(document_path: Path) -> str:
     )
 
 
-def extract_pdf(document_path: Path) -> str:
+def extract_pdf_ocr(document_path: Path, lang: str = "rus+eng", zoom: float = 2.0) -> str:
     try:
+        doc = fitz.open(str(document_path.resolve()))
         text_parts: list[str] = []
-        resolved = str(document_path.resolve())
-        with pdfplumber.open(resolved) as pdf:
-            for page in pdf.pages:
-                text_parts.append(page.extract_text() or "")
+
+        mat = fitz.Matrix(zoom, zoom)
+        config = r"--oem 3 --psm 6"
+
+        for page in doc:
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+            img = img.convert("L")  # <<< ВАЖНО
+
+            page_text = pytesseract.image_to_string(
+                img,
+                lang=lang,
+                config=config
+            )
+
+            text_parts.append(page_text)
+
         return "\n".join(text_parts)
+
     except Exception as exc:
-        raise ValueError(f"Ошибка чтения PDF {document_path}: {exc}") from exc
+        raise ValueError(f"Ошибка OCR PDF {document_path}: {exc}") from exc
 
 
 def extract_docx(document_path: Path) -> str:
@@ -62,43 +82,90 @@ def extract_docx(document_path: Path) -> str:
 def extract_text(path: str | Path) -> str:
     document_path = Path(path)
     kind = _detect_format(document_path)
+
     if kind == ".docx":
         return extract_docx(document_path)
-    return extract_pdf(document_path)
+
+    return extract_pdf_ocr(document_path)
 
 
 def normalize_text(text: str) -> str:
-    without_nbsp = text.replace("\xa0", " ")
-    collapsed_spaces = re.sub(r"[ \t]+", " ", without_nbsp)
-    collapsed_newlines = re.sub(r"\n+", "\n", collapsed_spaces)
-    return collapsed_newlines.strip()
+    text = text.replace("\xa0", " ")
+
+    text = re.sub(r"[|•·]", " ", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n+", "\n", text)
+    text = re.sub(r"\s{2,}", " ", text)
+
+    return text.strip()
+
+
+
+def fix_ocr_errors(text: str) -> str:
+    replacements = {
+        "Гpyппа": "Группа",
+        "Групnа": "Группа",
+        "TeMa": "Тема",
+        "Teмa": "Тема",
+        "CTyдeнт": "Студент",
+        "Cтудент": "Студент",
+        "ФИ0": "ФИО",
+        "oбучающегося": "обучающегося",
+        "»": "",
+    }
+
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
+
+    return text
 
 
 patterns: dict[str, list[str]] = {
     "ФИО": [
-        r"Студенту:\s*(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){2})",
-        r"ФИО обучающегося:\s*(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){2})",
-        r"обучающегося\s+(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){2})",
+    r"(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)\s+[А-ЯЁ][а-яё]+)",
+
+    r"(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)\s+[А-ЯЁ][а-яё]+)"
     ],
     "Группа": [
-        r"Группа:\s*(?P<value>[A-ЯA-Z0-9\-]+)",
-        r"Группы\s*(?P<value>[A-ЯA-Z0-9\-]+)",
+        r"(?:Группа|Группы)\s*[:\-]?\s*(?P<value>[A-ЯA-ZЁ]{1,4}\s*-?\s*\d{2,6})",
+        r"(?:группа)\s*(?P<value>[A-ЯA-ZЁ]{1,4}\s*-?\s*\d{2,6})",
+        r"(?P<value>[A-ЯA-ZЁ]{1,4}-\d{2,6})"
     ],
     "Тема": [
-        r"Тема ВКР:\s*«(?P<value>.+?)»",
-        r'Тема\s*"(?P<value>.+?)"',
-        r"на тему:\s*«(?P<value>.+?)»",
-        r"Тема работы:\s*«(?P<value>.+?)»",
-        r"по теме\s*(?P<value>.+?)(?:\(|$)",
+    r"(?:Тема|Tema|Teмa|Тeмa|Тема работы|Тема ВКР|на тему|по теме)\s*[:\-]?\s*«?(?P<value>[^\n»]{10,250})»?"
     ],
     "Дата": [
         r"Дата:\s*(?P<value>\d{2}\.\d{2}\.\d{2,4}|\[.*?\]|_+)",
         r"Срок сдачи студентом.*?:\s*(?P<value>\d{2}\.\d{2}\.\d{2,4}|\[.*?\]|_+)",
+        r"(?:Дата|Срок сдачи|Дата проверки|Работа сдана)\s*[:\-]?\s*"
+        r"«?\s*(?P<value>\d{1,2}\s*[.\-]\s*\d{1,2}\s*[.\-]\s*\d{2,4})\s*»?",
+        r"(?P<value>\d{1,2}\s+[а-яА-ЯёЁ]{3,10}\s+\d{4})",
+        r"(?P<value>\d{1,2}\s*[а-яА-ЯёЁ]{3,10}\s*\d{4}\s*[гr]?)",
+        r"«\s*(?P<value>\d{1,2}\s*[а-яА-ЯёЁ]+\s*\d{4})\s*»"
     ],
     "Подпись": [
         r"Студент:\s*(?P<value>_+)",
+        r"(?:Подпись(?:\s+[а-яА-ЯёЁ]+)?|Подпись преподавателя|Подпись руководителя)\s*[:\-]?\s*"
+        r"(?P<value>.*?)(?:\n|$)",
+        r"(?P<value>[_]{2,}|/{1,3}|\\{1,3}|—{2,})",
+        r"(?P<value>[A-Za-zА-Яа-яЁё]{0,3}\s*[/_\\]{1,3}\s*[A-Za-zА-Яа-яЁё]{0,3})"
     ],
 }
+
+
+def clean_fio(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    value = re.sub(r"\s+", " ", value).strip()
+
+    if re.search(r"\b(групп|посвящен|работ|тема|дата)\b", value.lower()):
+        return None
+
+    value = re.sub(r"\.\s*", ". ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+
+    return value
 
 
 def clean_value(value: str) -> str | None:
@@ -113,9 +180,17 @@ def clean_value(value: str) -> str | None:
 
 def extract_field(text: str, field_patterns: list[str]) -> str | None:
     for pattern in field_patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            return clean_value(match.group("value"))
+        for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+            value = clean_value(match.group("value"))
+
+            if not value:
+                continue
+
+            if re.search(r"\b(группа|тема|дата|подпись|работа|курсовая)\b", value.lower()):
+                continue
+
+            return value
+
     return None
 
 
@@ -145,7 +220,12 @@ def parse_document(path: str | Path) -> dict[str, str | None]:
             topic = extract_field(normalized, field_patterns) or extract_topic(raw_text)
             result[field] = topic
         else:
-            result[field] = extract_field(normalized, field_patterns)
+            value = extract_field(normalized, field_patterns)
+
+            if field == "ФИО":
+                value = clean_fio(value)
+
+            result[field] = value
     return result
 
 
@@ -252,4 +332,3 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
         y_position -= 8
 
     pdf_canvas.save()
-
