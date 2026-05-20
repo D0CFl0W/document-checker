@@ -9,6 +9,8 @@
 - **FastAPI** — HTTP API и раздача шаблона/статики.
 - **Jinja2** — главная страница `templates/index.html`.
 - **Pydantic** — схема тела для скачивания отчёта.
+- **Docker** – Контейнеризация
+- **Nginx** – Реверс прокси
 
 ## Точки входа
 
@@ -70,7 +72,7 @@ class FileDownloadRequest(BaseModel):
 Из корня репозитория:
 
 ```bash
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
+docker compose up -d --build
 ```
 
 Шрифт для PDF-отчёта: `fonts/DejaVuSans.ttf` (путь задаётся в `services/parser.py`).
