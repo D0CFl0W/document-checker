@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
 import fitz
 import pytesseract
 from PIL import Image
 from pathlib import Path
-import pdfplumber
 from docx import Document
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -55,7 +53,7 @@ def extract_pdf_ocr(document_path: Path, lang: str = "rus+eng", zoom: float = 2.
             pix = page.get_pixmap(matrix=mat)
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-            img = img.convert("L")  # <<< ВАЖНО
+            img = img.convert("L")
 
             page_text = pytesseract.image_to_string(
                 img,
@@ -122,17 +120,14 @@ def fix_ocr_errors(text: str) -> str:
 
 patterns: dict[str, list[str]] = {
     "ФИО": [
-    r"(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)\s+[А-ЯЁ][а-яё]+)",
-
-    r"(?P<value>[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)\s+[А-ЯЁ][а-яё]+)"
+        r"(?:Студент|студенту|Исполнитель|обучающегося)\s*[:\-]?\s*(?P<value>[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.)",
     ],
     "Группа": [
         r"(?:Группа|Группы)\s*[:\-]?\s*(?P<value>[A-ЯA-ZЁ]{1,4}\s*-?\s*\d{2,6})",
         r"(?:группа)\s*(?P<value>[A-ЯA-ZЁ]{1,4}\s*-?\s*\d{2,6})",
-        r"(?P<value>[A-ЯA-ZЁ]{1,4}-\d{2,6})"
     ],
     "Тема": [
-    r"(?:Тема|Tema|Teмa|Тeмa|Тема работы|Тема ВКР|на тему|по теме)\s*[:\-]?\s*«?(?P<value>[^\n»]{10,250})»?"
+        r"(?:Тема работы:|Тема ВКР|Тема|на тему)\s*[:\-]?\s*«?(?P<value>[^_\n»]{5,200})",
     ],
     "Дата": [
         r"Дата:\s*(?P<value>\d{2}\.\d{2}\.\d{2,4}|\[.*?\]|_+)",
@@ -143,13 +138,7 @@ patterns: dict[str, list[str]] = {
         r"(?P<value>\d{1,2}\s*[а-яА-ЯёЁ]{3,10}\s*\d{4}\s*[гr]?)",
         r"«\s*(?P<value>\d{1,2}\s*[а-яА-ЯёЁ]+\s*\d{4})\s*»"
     ],
-    "Подпись": [
-        r"Студент:\s*(?P<value>_+)",
-        r"(?:Подпись(?:\s+[а-яА-ЯёЁ]+)?|Подпись преподавателя|Подпись руководителя)\s*[:\-]?\s*"
-        r"(?P<value>.*?)(?:\n|$)",
-        r"(?P<value>[_]{2,}|/{1,3}|\\{1,3}|—{2,})",
-        r"(?P<value>[A-Za-zА-Яа-яЁё]{0,3}\s*[/_\\]{1,3}\s*[A-Za-zА-Яа-яЁё]{0,3})"
-    ],
+    "Подпись": [],
 }
 
 
@@ -186,7 +175,7 @@ def extract_field(text: str, field_patterns: list[str]) -> str | None:
             if not value:
                 continue
 
-            if re.search(r"\b(группа|тема|дата|подпись|работа|курсовая)\b", value.lower()):
+            if re.search(r"\b(группа|тема|дата|работа|курсовая)\b", value.lower()):
                 continue
 
             return value
@@ -194,38 +183,81 @@ def extract_field(text: str, field_patterns: list[str]) -> str | None:
     return None
 
 
-def extract_topic(raw_text: str) -> str | None:
-    lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+def extract_topic(text: str) -> str | None:
 
-    for i, line in enumerate(lines):
-        if not re.search(r"по теме", line, re.IGNORECASE):
-            continue
-        for j in range(i + 1, len(lines)):
-            candidate = lines[j].strip()
-            if not candidate or candidate.startswith("("):
-                continue
-            cleaned = re.sub(r"\s*\(.*?\)\s*$", "", candidate)
-            return cleaned.lstrip(":").strip()
-    return None
+    match = re.search(
+        r"(?:Тема|Тема работы|Тема ВКР|на тему)\s*[:\-]?\s*«?(?P<value>[^\n»]+)",
+        text,
+        re.IGNORECASE
+    )
+
+    if not match:
+        return None
+
+    value = match.group("value").strip()
+
+    if "_" in value:
+        return None
+
+    return value
+
+
+def clean_topic(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    value = value.strip()
+    if "_" in value:
+        return None
+
+    bad_fragments = [
+        "антиплагиат",
+        "система проверки",
+        "удк",
+        "институт",
+        "рег.",
+        "инв.",
+    ]
+
+    low = value.lower()
+    if any(b in low for b in bad_fragments):
+        return None
+
+    cut_markers = ["система проверки", "удк", "рег.", "инв.", "институт"]
+
+    for m in cut_markers:
+        if m in low:
+            value = re.split(m, value, flags=re.IGNORECASE)[0].strip()
+
+    return value if value else None
 
 
 def parse_document(path: str | Path) -> dict[str, str | None]:
     document_path = Path(path)
+
     raw_text = extract_text(document_path)
     normalized = normalize_text(raw_text)
 
     result: dict[str, str | None] = {}
+
     for field, field_patterns in patterns.items():
+
+        if field == "Подпись":
+            result[field] = "____"
+            continue
+
         if field == "Тема":
             topic = extract_field(normalized, field_patterns) or extract_topic(raw_text)
-            result[field] = topic
-        else:
-            value = extract_field(normalized, field_patterns)
+            result[field] = clean_topic(topic)
+            continue
 
-            if field == "ФИО":
-                value = clean_fio(value)
+        value = extract_field(normalized, field_patterns)
 
-            result[field] = value
+        if field == "ФИО":
+            value = clean_fio(value)
+
+        result[field] = value
+
     return result
 
 
