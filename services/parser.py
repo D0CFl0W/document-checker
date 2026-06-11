@@ -1,37 +1,29 @@
 from __future__ import annotations
 
+import os
+import platform
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 
+import cv2
 import fitz
+import numpy as np
 import pytesseract
-from PIL import Image
-from pathlib import Path
 from docx import Document
+from PIL import Image
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-
-from collections import defaultdict
-
-
-import cv2
-import numpy as np
-import subprocess
-import tempfile
-import shutil
-import platform
-import os
-import re
-
-
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
 
 
 def _detect_format(document_path: Path) -> str:
-    """Определяет pdf/docx по сигнатуре: в ZIP из фронта PDF могли назвать .docx."""
     try:
         head = document_path.read_bytes()[:8]
     except OSError as exc:
@@ -101,14 +93,11 @@ def extract_text(path: str | Path) -> str:
 
 def normalize_text(text: str) -> str:
     text = text.replace("\xa0", " ")
-
     text = re.sub(r"[|•·]", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n+", "\n", text)
     text = re.sub(r"\s{2,}", " ", text)
-
     return text.strip()
-
 
 
 def fix_ocr_errors(text: str) -> str:
@@ -196,7 +185,6 @@ def extract_field(text: str, field_patterns: list[str]) -> str | None:
 
 
 def extract_topic(text: str) -> str | None:
-
     match = re.search(
         r"(?:Тема|Тема работы|Тема ВКР|на тему)\s*[:\-]?\s*«?(?P<value>[^\n»]+)",
         text,
@@ -246,7 +234,6 @@ def clean_topic(value: str | None) -> str | None:
 
 def _fallback_docx_check(document_path: Path) -> str:
     try:
-        from docx import Document
         doc = Document(document_path)
         all_text = "\n".join(p.text for p in doc.paragraphs)
 
@@ -441,36 +428,62 @@ def parse_directory(directory: str | Path, limit: int = 5) -> list[dict[str, Any
     return results
 
 
-KEY_FIELDS = ["ФИО", "Группа", "Тема", "Дата"]
+KEY_FIELDS = ["ФИО", "Группа", "Тема"]
 
 
-def normalize_compare_value(value: str | None) -> str | None:
-    if value is None:
+def _normalize_fio(value: str) -> str | None:
+    words = re.findall(r'[а-яё]+', value.lower())
+    if not words:
         return None
-    return re.sub(r"\s+", " ", value).strip().lower()
+    words.sort(key=len, reverse=True)
+    return words[0][:4] if len(words[0]) >= 4 else words[0]
 
 
-def evaluate_completeness(
-    results: list[dict[str, Any]],
-) -> tuple[bool, dict[str, set[str | None]]]:
+def _normalize_group(value: str) -> str | None:
+    return re.sub(r'[^а-яёa-z0-9]', '', value.lower())
 
-    field_values: dict[str, set[str | None]] = defaultdict(set)
 
-    for item in results:
-        if "error" in item:
-            continue
+def _normalize_topic(value: str) -> str | None:
+    clean_topic = re.sub(r'[^\w\s]', '', value.lower())
+    words = clean_topic.split()
+    return " ".join(words[:3])
 
-        for field in KEY_FIELDS:
-            value = normalize_compare_value(item["data"].get(field))
-            field_values[field].add(value)
 
-    inconsistencies: dict[str, set[str | None]] = {}
+def evaluate_completeness(results: list[dict[str, Any]]) -> tuple[bool, dict[str, set[str]]]:
+    inconsistencies: dict[str, set[str]] = {}
 
-    for field, values in field_values.items():
-        if len(values) > 1:
-            inconsistencies[field] = values
+    for field in KEY_FIELDS:
+        normalized_values = set()
+        original_values = set()
 
-    return len(inconsistencies) == 0, inconsistencies
+        for item in results:
+            if "error" in item:
+                continue
+
+            raw_val = item["data"].get(field)
+
+            if not raw_val or str(raw_val).strip() in ["—", "-", "нет", ""]:
+                continue
+
+            if field == "ФИО":
+                norm_val = _normalize_fio(str(raw_val))
+            elif field == "Группа":
+                norm_val = _normalize_group(str(raw_val))
+            elif field == "Тема":
+                norm_val = _normalize_topic(str(raw_val))
+            else:
+                norm_val = str(raw_val).strip().lower()
+
+            if norm_val:
+                normalized_values.add(norm_val)
+                original_values.add(str(raw_val).strip())
+
+        if len(normalized_values) > 1:
+            inconsistencies[field] = original_values
+
+    is_complete = len(inconsistencies) == 0
+    return is_complete, inconsistencies
+
 
 
 def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None:
@@ -481,7 +494,6 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
     is_complete, inconsistencies = evaluate_completeness(results)
 
     y_position = 800
-
 
     status = "КОМПЛЕКТ" if is_complete else "НЕ КОМПЛЕКТ"
     pdf_canvas.drawString(50, y_position, f"Статус набора: {status}")
@@ -497,7 +509,6 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
             y_position -= 10
 
         y_position -= 10
-
 
     for item in results:
         if y_position < 100:
@@ -523,4 +534,3 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
         y_position -= 8
 
     pdf_canvas.save()
-
