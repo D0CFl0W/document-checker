@@ -14,6 +14,18 @@ from reportlab.pdfgen import canvas
 
 from collections import defaultdict
 
+
+import cv2
+import numpy as np
+import subprocess
+import tempfile
+import shutil
+import platform
+import os
+import re
+
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
 
@@ -232,8 +244,156 @@ def clean_topic(value: str | None) -> str | None:
     return value if value else None
 
 
+def _fallback_docx_check(document_path: Path) -> str:
+    try:
+        from docx import Document
+        doc = Document(document_path)
+        all_text = "\n".join(p.text for p in doc.paragraphs)
+
+        if re.search(r"_{5,}", all_text) or re.search(r"-{5,}", all_text):
+            return "нет"
+
+        for i, para in enumerate(doc.paragraphs):
+            if "подпись" in para.text.lower():
+                if len(para.inline_shapes) > 0:
+                    return "есть"
+                if i + 1 < len(doc.paragraphs) and len(doc.paragraphs[i + 1].inline_shapes) > 0:
+                    return "есть"
+        return "нет"
+    except Exception:
+        return "нет"
+
+
+def detect_signature_cv2(document_path: Path, kind: str, debug: bool = False) -> str:
+    actual_path = document_path
+    temp_dir = None
+
+    try:
+        if kind == ".docx":
+            if platform.system() == "Windows":
+                win_paths = [
+                    r"C:\Program Files\LibreOffice\program\soffice.exe",
+                    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+                ]
+                cmd_exec = None
+                for p in win_paths:
+                    if os.path.exists(p):
+                        cmd_exec = p
+                        break
+
+                if not cmd_exec:
+                    return _fallback_docx_check(document_path)
+            else:
+                cmd_exec = "libreoffice"
+
+            temp_dir = Path(tempfile.mkdtemp())
+            env = os.environ.copy()
+            env["HOME"] = str(temp_dir)
+            lo_profile_path = (temp_dir / "lo_profile").as_uri()
+
+            cmd = [
+                cmd_exec, "--headless", "--invisible", "--norestore",
+                f"-env:UserInstallation={lo_profile_path}",
+                "--convert-to", "pdf",
+                "--outdir", str(temp_dir),
+                str(document_path.resolve())
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+
+            if result.returncode != 0:
+                err_msg = result.stderr.strip().replace('\n', ' ')[:150]
+                return f"нет (ошибка конвертации: {err_msg})"
+
+            pdf_files = list(temp_dir.glob("*.pdf"))
+            if not pdf_files:
+                return "нет"
+
+            actual_path = pdf_files[0]
+            kind = ".pdf"
+
+        doc = fitz.open(str(actual_path.resolve()))
+        pages_to_check = doc[-2:] if len(doc) >= 2 else doc
+
+        for page_idx, page in enumerate(pages_to_check):
+            hits = page.search_for("Подпись") or page.search_for("подпись")
+
+            if hits:
+                rect = hits[0]
+                crop_y0 = max(0, rect.y0 - 100)
+                crop_y1 = min(page.rect.height, rect.y1 + 50)
+                crop_x0 = max(0, rect.x0 - 50)
+                crop_x1 = min(page.rect.width, rect.x1 + 200)
+            else:
+                crop_y0 = int(page.rect.height * 0.65)
+                crop_y1 = int(page.rect.height)
+                crop_x0 = 0
+                crop_x1 = int(page.rect.width)
+
+            crop_rect = fitz.Rect(crop_x0, crop_y0, crop_x1, crop_y1)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat, clip=crop_rect)
+
+            if pix.width < 50 or pix.height < 50:
+                continue
+
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+            thresh = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, 15, 10
+            )
+
+            if debug:
+                cv2.imwrite(f"debug_page{page_idx}_crop.png", img)
+                cv2.imwrite(f"debug_page{page_idx}_thresh.png", thresh)
+
+            h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 1))
+            horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, h_kernel)
+
+            if debug:
+                cv2.imwrite(f"debug_page{page_idx}_lines.png", horizontal_lines)
+
+            contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            signature_found = False
+
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+
+                if w > 50 and h < 15:
+                    roi_y_start = max(0, y - 80)
+                    roi_y_end = max(roi_y_start + 10, y - 5)
+
+                    roi_x_start = max(0, x - 30)
+                    roi_x_end = min(thresh.shape[1], x + w + 30)
+
+                    roi = thresh[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+
+                    ink_pixels = cv2.countNonZero(roi)
+
+                    if ink_pixels > 800:
+                        signature_found = True
+                        break
+
+            if signature_found:
+                return "есть"
+
+        return "нет"
+
+    except subprocess.TimeoutExpired:
+        return "нет (таймаут)"
+    except Exception as exc:
+        return f"ошибка: {exc}"
+    finally:
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def parse_document(path: str | Path) -> dict[str, str | None]:
     document_path = Path(path)
+    kind = _detect_format(document_path)
 
     raw_text = extract_text(document_path)
     normalized = normalize_text(raw_text)
@@ -241,9 +401,8 @@ def parse_document(path: str | Path) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
 
     for field, field_patterns in patterns.items():
-
         if field == "Подпись":
-            result[field] = "____"
+            result[field] = detect_signature_cv2(document_path, kind)
             continue
 
         if field == "Тема":
@@ -364,3 +523,4 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
         y_position -= 8
 
     pdf_canvas.save()
+
