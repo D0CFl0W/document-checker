@@ -200,58 +200,69 @@
       sendZipToBackend(selectedFiles, "files"),
     );
   if (checkArchiveBtn)
-    checkArchiveBtn.addEventListener("click", async () => {
-      const archiveFile = archiveInput ? archiveInput.files[0] : null;
-      if (!archiveFile) {
-        displayArchiveResults(["Архив не выбран."], false);
-        updateReportStatus("не выбран");
+  checkArchiveBtn.addEventListener("click", async () => {
+    const archiveFile = archiveInput ? archiveInput.files[0] : null;
+    if (!archiveFile) {
+      displayArchiveResults(["Архив не выбран."], false);
+      updateReportStatus("не выбран");
+      return;
+    }
+
+    checkArchiveBtn.disabled = true;
+    checkArchiveBtn.textContent = "Распаковка и отправка...";
+
+    try {
+      const zip = await JSZip.loadAsync(archiveFile);
+
+      const validFiles = [];
+
+      for (const entry of Object.values(zip.files)) {
+        if (entry.dir) continue;
+        if (entry.name.includes("__MACOSX") || entry.name.includes("._")) continue;
+
+        const name = entry.name.toLowerCase();
+        if (name.endsWith(".docx") || name.endsWith(".pdf")) {
+          const blob = await entry.async("blob");
+          validFiles.push({ name: entry.name, blob });
+        }
+      }
+
+      // Проверка на дубликаты по имени файла
+      const names = validFiles.map((f) => f.name.toLowerCase());
+      const duplicates = names.filter((n, i) => names.indexOf(n) !== i);
+      if (duplicates.length > 0) {
+        displayArchiveResults(
+          [`Обнаружены одинаковые файлы: ${[...new Set(duplicates)].join(", ")}`],
+          false
+        );
         return;
       }
 
-      checkArchiveBtn.disabled = true;
-      checkArchiveBtn.textContent = "Распаковка и отправка...";
-
-      try {
-        const zip = await JSZip.loadAsync(archiveFile);
-
-        const validFiles = [];
-
-        for (const entry of Object.values(zip.files)) {
-          if (entry.dir) continue;
-          if (entry.name.includes("__MACOSX") || entry.name.includes("._")) continue;
-
-          const name = entry.name.toLowerCase();
-          if (name.endsWith(".docx") || name.endsWith(".pdf")) {
-            const blob = await entry.async("blob");
-            validFiles.push(blob);
-          }
-        }
-
-        if (validFiles.length < 5) {
-          displayArchiveResults(
-            [`Найдено только ${validFiles.length} подходящих файлов (нужно 5 в формате .docx или .pdf).`],
-            false
-          );
-          return;
-        }
-
-        const extractedFiles = {
-          title:    validFiles[0],
-          task:     validFiles[1],
-          review:   validFiles[2],
-          norm:     validFiles[3],
-          antiplag: validFiles[4],
-        };
-
-        await sendZipToBackend(extractedFiles, "archive");
-      } catch (err) {
-        console.error(err);
-        displayArchiveResults(["Ошибка при разборе архива."], false);
-      } finally {
-        checkArchiveBtn.disabled = false;
-        checkArchiveBtn.textContent = "Проверить архив";
+      if (validFiles.length < 5) {
+        displayArchiveResults(
+          [`Найдено только ${validFiles.length} подходящих файлов (нужно 5 в формате .docx или .pdf).`],
+          false
+        );
+        return;
       }
-    });
+
+      const extractedFiles = {
+        title:    validFiles[0].blob,
+        task:     validFiles[1].blob,
+        review:   validFiles[2].blob,
+        norm:     validFiles[3].blob,
+        antiplag: validFiles[4].blob,
+      };
+
+      await sendZipToBackend(extractedFiles, "archive");
+    } catch (err) {
+      console.error(err);
+      displayArchiveResults(["Ошибка при разборе архива."], false);
+    } finally {
+      checkArchiveBtn.disabled = false;
+      checkArchiveBtn.textContent = "Проверить архив";
+    }
+  });
 
   // ---------- ЗАГРУЗКА АРХИВА (отображение имени) ----------
   if (archiveInput) {
