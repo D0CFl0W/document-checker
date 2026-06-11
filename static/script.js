@@ -214,48 +214,35 @@
       try {
         const zip = await JSZip.loadAsync(archiveFile);
 
-        // 1. Извлекаем все файлы, которые не являются папками и имеют нужный формат
         const validFiles = [];
-        const entries = Object.values(zip.files).filter((entry) => !entry.dir);
 
-        for (const entry of entries) {
-          if (entry.name.includes("__MACOSX") || entry.name.includes("._")) {
-            continue;
-          }
+        for (const entry of Object.values(zip.files)) {
+          if (entry.dir) continue;
+          if (entry.name.includes("__MACOSX") || entry.name.includes("._")) continue;
+
           const name = entry.name.toLowerCase();
           if (name.endsWith(".docx") || name.endsWith(".pdf")) {
             const blob = await entry.async("blob");
-            validFiles.push({ name: entry.name, blob: blob });
+            validFiles.push(blob);
           }
         }
 
-        // 2. Проверяем, набралось ли 5 файлов
         if (validFiles.length < 5) {
           displayArchiveResults(
-            [
-              `Найдено только ${validFiles.length} подходящих файлов (нужно 5 в формате docx или pdf).`,
-            ],
-            false,
+            [`Найдено только ${validFiles.length} подходящих файлов (нужно 5 в формате .docx или .pdf).`],
+            false
           );
           return;
         }
 
-        // 3. Сортируем файлы по имени (чтобы 1.pdf был первым, 2.docx вторым и т.д.)
-        validFiles.sort((a, b) => a.name.localeCompare(b.name));
-
-        // 4. Распределяем по ключам по порядку
         const extractedFiles = {
-          title: validFiles[0].blob,
-          task: validFiles[1].blob,
-          review: validFiles[2].blob,
-          norm: validFiles[3].blob,
-          antiplag: validFiles[4].blob,
+          title:    validFiles[0],
+          task:     validFiles[1],
+          review:   validFiles[2],
+          norm:     validFiles[3],
+          antiplag: validFiles[4],
         };
 
-        console.log(
-          "Файлы успешно распределены по порядку:",
-          validFiles.map((f) => f.name),
-        );
         await sendZipToBackend(extractedFiles, "archive");
       } catch (err) {
         console.error(err);
