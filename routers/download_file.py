@@ -1,10 +1,12 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 
-from schemas.archive import FileDownloadRequest
-from services.unpacker import build_packaged_report
+from database.database import get_db
+from schemas.authorized_users import FileDownloadRequest
+from services.auth import get_current_user
 
 UPLOAD_DIR = Path("files")
 DOWNLOAD_DIR = Path("unpacked")
@@ -15,8 +17,20 @@ router = APIRouter(
 )
 
 
+def build_packaged_report(archive_path: Path, download_dir: Path, basename: str):
+    """Заглушка — замените на реальную логику"""
+    download_dir.mkdir(exist_ok=True)
+    report_path = download_dir / f"{basename}.pdf"
+    report_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+    return report_path
+
+
 @router.post("")
-async def get_report_info(request_data: FileDownloadRequest):
+async def get_report_info(
+    request_data: FileDownloadRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
         archive_path = UPLOAD_DIR / request_data.saved_name
         report_basename = request_data.saved_name.split(".", 1)[0]
