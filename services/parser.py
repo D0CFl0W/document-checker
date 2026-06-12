@@ -1,25 +1,29 @@
 from __future__ import annotations
 
+import os
+import platform
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any
 
+import cv2
 import fitz
+import numpy as np
 import pytesseract
-from PIL import Image
-from pathlib import Path
 from docx import Document
+from PIL import Image
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-
-from collections import defaultdict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
 
 
 def _detect_format(document_path: Path) -> str:
-    """Определяет pdf/docx по сигнатуре: в ZIP из фронта PDF могли назвать .docx."""
     try:
         head = document_path.read_bytes()[:8]
     except OSError as exc:
@@ -89,14 +93,11 @@ def extract_text(path: str | Path) -> str:
 
 def normalize_text(text: str) -> str:
     text = text.replace("\xa0", " ")
-
     text = re.sub(r"[|•·]", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n+", "\n", text)
     text = re.sub(r"\s{2,}", " ", text)
-
     return text.strip()
-
 
 
 def fix_ocr_errors(text: str) -> str:
@@ -184,7 +185,6 @@ def extract_field(text: str, field_patterns: list[str]) -> str | None:
 
 
 def extract_topic(text: str) -> str | None:
-
     match = re.search(
         r"(?:Тема|Тема работы|Тема ВКР|на тему)\s*[:\-]?\s*«?(?P<value>[^\n»]+)",
         text,
@@ -232,8 +232,155 @@ def clean_topic(value: str | None) -> str | None:
     return value if value else None
 
 
+def _fallback_docx_check(document_path: Path) -> str:
+    try:
+        doc = Document(document_path)
+        all_text = "\n".join(p.text for p in doc.paragraphs)
+
+        if re.search(r"_{5,}", all_text) or re.search(r"-{5,}", all_text):
+            return "нет"
+
+        for i, para in enumerate(doc.paragraphs):
+            if "подпись" in para.text.lower():
+                if len(para.inline_shapes) > 0:
+                    return "есть"
+                if i + 1 < len(doc.paragraphs) and len(doc.paragraphs[i + 1].inline_shapes) > 0:
+                    return "есть"
+        return "нет"
+    except Exception:
+        return "нет"
+
+
+def detect_signature_cv2(document_path: Path, kind: str, debug: bool = False) -> str:
+    actual_path = document_path
+    temp_dir = None
+
+    try:
+        if kind == ".docx":
+            if platform.system() == "Windows":
+                win_paths = [
+                    r"C:\Program Files\LibreOffice\program\soffice.exe",
+                    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe"
+                ]
+                cmd_exec = None
+                for p in win_paths:
+                    if os.path.exists(p):
+                        cmd_exec = p
+                        break
+
+                if not cmd_exec:
+                    return _fallback_docx_check(document_path)
+            else:
+                cmd_exec = "libreoffice"
+
+            temp_dir = Path(tempfile.mkdtemp())
+            env = os.environ.copy()
+            env["HOME"] = str(temp_dir)
+            lo_profile_path = (temp_dir / "lo_profile").as_uri()
+
+            cmd = [
+                cmd_exec, "--headless", "--invisible", "--norestore",
+                f"-env:UserInstallation={lo_profile_path}",
+                "--convert-to", "pdf",
+                "--outdir", str(temp_dir),
+                str(document_path.resolve())
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+
+            if result.returncode != 0:
+                err_msg = result.stderr.strip().replace('\n', ' ')[:150]
+                return f"нет (ошибка конвертации: {err_msg})"
+
+            pdf_files = list(temp_dir.glob("*.pdf"))
+            if not pdf_files:
+                return "нет"
+
+            actual_path = pdf_files[0]
+            kind = ".pdf"
+
+        doc = fitz.open(str(actual_path.resolve()))
+        pages_to_check = doc[-2:] if len(doc) >= 2 else doc
+
+        for page_idx, page in enumerate(pages_to_check):
+            hits = page.search_for("Подпись") or page.search_for("подпись")
+
+            if hits:
+                rect = hits[0]
+                crop_y0 = max(0, rect.y0 - 100)
+                crop_y1 = min(page.rect.height, rect.y1 + 50)
+                crop_x0 = max(0, rect.x0 - 50)
+                crop_x1 = min(page.rect.width, rect.x1 + 200)
+            else:
+                crop_y0 = int(page.rect.height * 0.65)
+                crop_y1 = int(page.rect.height)
+                crop_x0 = 0
+                crop_x1 = int(page.rect.width)
+
+            crop_rect = fitz.Rect(crop_x0, crop_y0, crop_x1, crop_y1)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat, clip=crop_rect)
+
+            if pix.width < 50 or pix.height < 50:
+                continue
+
+            img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+            thresh = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, 15, 10
+            )
+
+            if debug:
+                cv2.imwrite(f"debug_page{page_idx}_crop.png", img)
+                cv2.imwrite(f"debug_page{page_idx}_thresh.png", thresh)
+
+            h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (60, 1))
+            horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, h_kernel)
+
+            if debug:
+                cv2.imwrite(f"debug_page{page_idx}_lines.png", horizontal_lines)
+
+            contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            signature_found = False
+
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+
+                if w > 50 and h < 15:
+                    roi_y_start = max(0, y - 80)
+                    roi_y_end = max(roi_y_start + 10, y - 5)
+
+                    roi_x_start = max(0, x - 30)
+                    roi_x_end = min(thresh.shape[1], x + w + 30)
+
+                    roi = thresh[roi_y_start:roi_y_end, roi_x_start:roi_x_end]
+
+                    ink_pixels = cv2.countNonZero(roi)
+
+                    if ink_pixels > 800:
+                        signature_found = True
+                        break
+
+            if signature_found:
+                return "есть"
+
+        return "нет"
+
+    except subprocess.TimeoutExpired:
+        return "нет (таймаут)"
+    except Exception as exc:
+        return f"ошибка: {exc}"
+    finally:
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def parse_document(path: str | Path) -> dict[str, str | None]:
     document_path = Path(path)
+    kind = _detect_format(document_path)
 
     raw_text = extract_text(document_path)
     normalized = normalize_text(raw_text)
@@ -241,9 +388,8 @@ def parse_document(path: str | Path) -> dict[str, str | None]:
     result: dict[str, str | None] = {}
 
     for field, field_patterns in patterns.items():
-
         if field == "Подпись":
-            result[field] = "____"
+            result[field] = detect_signature_cv2(document_path, kind)
             continue
 
         if field == "Тема":
@@ -282,36 +428,62 @@ def parse_directory(directory: str | Path, limit: int = 5) -> list[dict[str, Any
     return results
 
 
-KEY_FIELDS = ["ФИО", "Группа", "Тема", "Дата"]
+KEY_FIELDS = ["ФИО", "Группа", "Тема"]
 
 
-def normalize_compare_value(value: str | None) -> str | None:
-    if value is None:
+def _normalize_fio(value: str) -> str | None:
+    words = re.findall(r'[а-яё]+', value.lower())
+    if not words:
         return None
-    return re.sub(r"\s+", " ", value).strip().lower()
+    words.sort(key=len, reverse=True)
+    return words[0][:4] if len(words[0]) >= 4 else words[0]
 
 
-def evaluate_completeness(
-    results: list[dict[str, Any]],
-) -> tuple[bool, dict[str, set[str | None]]]:
+def _normalize_group(value: str) -> str | None:
+    return re.sub(r'[^а-яёa-z0-9]', '', value.lower())
 
-    field_values: dict[str, set[str | None]] = defaultdict(set)
 
-    for item in results:
-        if "error" in item:
-            continue
+def _normalize_topic(value: str) -> str | None:
+    clean_topic = re.sub(r'[^\w\s]', '', value.lower())
+    words = clean_topic.split()
+    return " ".join(words[:3])
 
-        for field in KEY_FIELDS:
-            value = normalize_compare_value(item["data"].get(field))
-            field_values[field].add(value)
 
-    inconsistencies: dict[str, set[str | None]] = {}
+def evaluate_completeness(results: list[dict[str, Any]]) -> tuple[bool, dict[str, set[str]]]:
+    inconsistencies: dict[str, set[str]] = {}
 
-    for field, values in field_values.items():
-        if len(values) > 1:
-            inconsistencies[field] = values
+    for field in KEY_FIELDS:
+        normalized_values = set()
+        original_values = set()
 
-    return len(inconsistencies) == 0, inconsistencies
+        for item in results:
+            if "error" in item:
+                continue
+
+            raw_val = item["data"].get(field)
+
+            if not raw_val or str(raw_val).strip() in ["—", "-", "нет", ""]:
+                continue
+
+            if field == "ФИО":
+                norm_val = _normalize_fio(str(raw_val))
+            elif field == "Группа":
+                norm_val = _normalize_group(str(raw_val))
+            elif field == "Тема":
+                norm_val = _normalize_topic(str(raw_val))
+            else:
+                norm_val = str(raw_val).strip().lower()
+
+            if norm_val:
+                normalized_values.add(norm_val)
+                original_values.add(str(raw_val).strip())
+
+        if len(normalized_values) > 1:
+            inconsistencies[field] = original_values
+
+    is_complete = len(inconsistencies) == 0
+    return is_complete, inconsistencies
+
 
 
 def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None:
@@ -322,7 +494,6 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
     is_complete, inconsistencies = evaluate_completeness(results)
 
     y_position = 800
-
 
     status = "КОМПЛЕКТ" if is_complete else "НЕ КОМПЛЕКТ"
     pdf_canvas.drawString(50, y_position, f"Статус набора: {status}")
@@ -338,7 +509,6 @@ def generate_pdf_report(results: list[dict[str, Any]], output_path: str) -> None
             y_position -= 10
 
         y_position -= 10
-
 
     for item in results:
         if y_position < 100:
