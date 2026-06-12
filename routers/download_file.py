@@ -1,9 +1,12 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 
-from schemas.archive import FileDownloadRequest
+from database.database import get_db
+from schemas.authorized_users import FileDownloadRequest
+from services.auth import get_current_user
 from services.unpacker import build_packaged_report
 
 UPLOAD_DIR = Path("files")
@@ -16,7 +19,11 @@ router = APIRouter(
 
 
 @router.post("")
-async def get_report_info(request_data: FileDownloadRequest):
+async def get_report_info(
+    request_data: FileDownloadRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     try:
         archive_path = UPLOAD_DIR / request_data.saved_name
         report_basename = request_data.saved_name.split(".", 1)[0]

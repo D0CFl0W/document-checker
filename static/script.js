@@ -1,11 +1,13 @@
 (function () {
   "use strict";
 
-  // ---------- КОНФИГУРАЦИЯ ----------
   const CONFIG = {
     ENDPOINTS: {
       UPLOAD_ZIP: "/upload-archive",
       DOWNLOAD: "/download-report",
+      LOGIN: "/api/v1/auth/login",
+      REGISTER: "/api/v1/auth/register",
+      ME: "/api/v1/auth/me",
     },
   };
 
@@ -16,14 +18,11 @@
     norm: null,
     antiplag: null,
   };
+  let uploadedFileInfo = null;
+  let accessToken = localStorage.getItem("access_token") || null;
 
-  // Элементы (старые, для отдельных файлов)
-  const notificationArea = document.getElementById("notificationArea");
-  const errorList = document.getElementById("errorList");
-  const successMsg = document.getElementById("successMessage");
   const reportStatusSpan = document.getElementById("reportStatus");
   const downloadBtn = document.getElementById("downloadReportBtn");
-  let uploadedFileInfo = null;
 
   const fileInputs = [
     {
@@ -58,7 +57,6 @@
     },
   ];
 
-  // Элементы для архивной загрузки и уведомлений
   const archiveInput = document.getElementById("archiveInput");
   const archiveName = document.getElementById("archive-name");
   const archiveAlert = document.getElementById("archiveAlert");
@@ -69,11 +67,12 @@
   const filesAlert = document.getElementById("filesAlert");
   const filesErrorList = document.getElementById("filesErrorList");
   const filesSuccess = document.getElementById("filesSuccess");
-  const loginBtn = document.getElementById("loginBtn");
   const authMessage = document.getElementById("authMessage");
+  const regMessage = document.getElementById("regMessage");
   const adminDbLink = document.getElementById("adminDbLink");
+  const authLink = document.getElementById("authLink");
+  const logoutBtn = document.getElementById("logoutBtn");
 
-  // ---------- НАВИГАЦИЯ (7 страниц, но главная теперь включает загрузку) ----------
   const allNavLinks = document.querySelectorAll(".nav-link");
   const allPages = document.querySelectorAll(".page");
 
@@ -81,8 +80,8 @@
     allPages.forEach((p) => p.classList.remove("active"));
     const targetPage = document.getElementById(targetId);
     if (targetPage) targetPage.classList.add("active");
-
     allNavLinks.forEach((link) => {
+      if (link.id === "logoutBtn") return;
       link.classList.toggle("active", link.dataset.page === targetId);
     });
   }
@@ -90,11 +89,11 @@
   allNavLinks.forEach((link) => {
     link.addEventListener("click", (e) => {
       e.preventDefault();
+      if (link.id === "logoutBtn") return;
       if (link.dataset.page) switchPage(link.dataset.page);
     });
   });
 
-  // ---------- ОБРАБОТКА ОТДЕЛЬНЫХ ФАЙЛОВ ----------
   fileInputs.forEach((item) => {
     if (!item.input) return;
     item.input.addEventListener("change", () => {
@@ -117,18 +116,32 @@
     });
   });
 
-  // ---------- ОТПРАВКА ZIP (общая) ----------
+  function getAuthHeaders(isJson = false) {
+    const headers = {};
+    if (isJson) headers["Content-Type"] = "application/json";
+    if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+    return headers;
+  }
+
   async function sendZipToBackend(filesToZip, sourceType = "files") {
+    if (!accessToken) {
+      const msg = "Требуется авторизация. Войдите в систему.";
+      if (sourceType === "files") displayFileResults([msg], false);
+      else displayArchiveResults([msg], false);
+      updateReportStatus("требуется вход");
+      switchPage("page-auth");
+      return;
+    }
+
     const missing = Object.keys(filesToZip).filter((key) => !filesToZip[key]);
     if (missing.length > 0) {
-      if (sourceType === "files") {
+      if (sourceType === "files")
         displayFileResults(
           ["Загрузите все 5 документов перед отправкой!"],
           false,
         );
-      } else {
+      else
         displayArchiveResults(["В архиве не найдены все 5 документов!"], false);
-      }
       updateReportStatus("ошибка загрузки");
       return;
     }
@@ -152,41 +165,31 @@
 
       const response = await fetch(`${CONFIG.ENDPOINTS.UPLOAD_ZIP}`, {
         method: "POST",
+        headers: getAuthHeaders(),
         body: formData,
       });
 
+      if (response.status === 401) {
+        handleLogout();
+        throw new Error("Сессия истекла. Войдите заново.");
+      }
       if (!response.ok) throw new Error("Ошибка сервера");
 
       uploadedFileInfo = await response.json();
       const data = uploadedFileInfo;
-      // Если сервер вернул ошибки в ключе 'errors'
       if (data.errors && data.errors.length > 0) {
-        if (sourceType === "files") {
-          displayFileResults(data.errors, false);
-        } else {
-          displayArchiveResults(data.errors, false);
-        }
+        if (sourceType === "files") displayFileResults(data.errors, false);
+        else displayArchiveResults(data.errors, false);
         updateReportStatus("обнаружены замечания");
       } else {
-        if (sourceType === "files") {
-          displayFileResults([], true);
-        } else {
-          displayArchiveResults([], true);
-        }
+        if (sourceType === "files") displayFileResults([], true);
+        else displayArchiveResults([], true);
         updateReportStatus("успешно");
       }
     } catch (err) {
-      if (sourceType === "files") {
-        displayFileResults(
-          ["Ошибка связи с сервером. Проверьте FastAPI и CORS."],
-          false,
-        );
-      } else {
-        displayArchiveResults(
-          ["Ошибка связи с сервером. Проверьте FastAPI и CORS."],
-          false,
-        );
-      }
+      const msg = err.message || "Ошибка связи с сервером.";
+      if (sourceType === "files") displayFileResults([msg], false);
+      else displayArchiveResults([msg], false);
       updateReportStatus("ошибка сервера");
     } finally {
       btn.disabled = false;
@@ -199,8 +202,18 @@
     checkFilesBtn.addEventListener("click", () =>
       sendZipToBackend(selectedFiles, "files"),
     );
-  if (checkArchiveBtn)
+
+  if (checkArchiveBtn) {
     checkArchiveBtn.addEventListener("click", async () => {
+      if (!accessToken) {
+        displayArchiveResults(
+          ["Требуется авторизация. Войдите в систему."],
+          false,
+        );
+        switchPage("page-auth");
+        return;
+      }
+
       const archiveFile = archiveInput ? archiveInput.files[0] : null;
       if (!archiveFile) {
         displayArchiveResults(["Архив не выбран."], false);
@@ -213,37 +226,40 @@
 
       try {
         const zip = await JSZip.loadAsync(archiveFile);
-
-        // 1. Извлекаем все файлы, которые не являются папками и имеют нужный формат
         const validFiles = [];
-        const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-
-        for (const entry of entries) {
-          if (entry.name.includes("__MACOSX") || entry.name.includes("._")) {
+        for (const entry of Object.values(zip.files)) {
+          if (entry.dir) continue;
+          if (entry.name.includes("__MACOSX") || entry.name.includes("._"))
             continue;
-          }
           const name = entry.name.toLowerCase();
           if (name.endsWith(".docx") || name.endsWith(".pdf")) {
             const blob = await entry.async("blob");
-            validFiles.push({ name: entry.name, blob: blob });
+            validFiles.push({ name: entry.name, blob });
           }
         }
 
-        // 2. Проверяем, набралось ли 5 файлов
-        if (validFiles.length < 5) {
+        const names = validFiles.map((f) => f.name.toLowerCase());
+        const duplicates = names.filter((n, i) => names.indexOf(n) !== i);
+        if (duplicates.length > 0) {
           displayArchiveResults(
             [
-              `Найдено только ${validFiles.length} подходящих файлов (нужно 5 в формате docx или pdf).`,
+              `Обнаружены одинаковые файлы: ${[...new Set(duplicates)].join(", ")}`,
             ],
             false,
           );
           return;
         }
 
-        // 3. Сортируем файлы по имени (чтобы 1.pdf был первым, 2.docx вторым и т.д.)
-        validFiles.sort((a, b) => a.name.localeCompare(b.name));
+        if (validFiles.length < 5) {
+          displayArchiveResults(
+            [
+              `Найдено только ${validFiles.length} подходящих файлов (нужно 5).`,
+            ],
+            false,
+          );
+          return;
+        }
 
-        // 4. Распределяем по ключам по порядку
         const extractedFiles = {
           title: validFiles[0].blob,
           task: validFiles[1].blob,
@@ -252,10 +268,6 @@
           antiplag: validFiles[4].blob,
         };
 
-        console.log(
-          "Файлы успешно распределены по порядку:",
-          validFiles.map((f) => f.name),
-        );
         await sendZipToBackend(extractedFiles, "archive");
       } catch (err) {
         console.error(err);
@@ -265,8 +277,8 @@
         checkArchiveBtn.textContent = "Проверить архив";
       }
     });
+  }
 
-  // ---------- ЗАГРУЗКА АРХИВА (отображение имени) ----------
   if (archiveInput) {
     archiveInput.addEventListener("change", () => {
       const file = archiveInput.files[0];
@@ -276,43 +288,47 @@
     });
   }
 
-  // ---------- СКАЧИВАНИЕ ОТЧЁТА ----------
-  downloadBtn.addEventListener("click", async () => {
-    // 3. Проверяем, есть ли данные для отправки
-    if (!uploadedFileInfo) {
-      alert("Сначала дождитесь окончания загрузки и проверки файла!");
-      return;
-    }
+  if (downloadBtn) {
+    downloadBtn.addEventListener("click", async () => {
+      if (!accessToken) {
+        alert("Требуется авторизация.");
+        switchPage("page-auth");
+        return;
+      }
+      if (!uploadedFileInfo) {
+        alert("Сначала дождитесь окончания загрузки и проверки файла!");
+        return;
+      }
 
-    try {
-      const response = await fetch(`${CONFIG.ENDPOINTS.DOWNLOAD}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        // 4. Отправляем те самые сохраненные данные
-        body: JSON.stringify(uploadedFileInfo),
-      });
+      try {
+        const response = await fetch(`${CONFIG.ENDPOINTS.DOWNLOAD}`, {
+          method: "POST",
+          headers: getAuthHeaders(true),
+          body: JSON.stringify(uploadedFileInfo),
+        });
 
-      if (!response.ok) throw new Error("Файл не найден на сервере");
+        if (response.status === 401) {
+          handleLogout();
+          throw new Error("Сессия истекла.");
+        }
+        if (!response.ok) throw new Error("Файл не найден на сервере");
 
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Report_Normokontrol_${new Date().toISOString().slice(0, 10)}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      // Теперь выведем реальную ошибку в консоль, чтобы в будущем не гадать
-      console.error("Ошибка при скачивании:", err);
-      alert("Не удалось скачать отчёт. Посмотрите ошибку в консоли (F12).");
-    }
-  });
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Report_Normokontrol_${new Date().toISOString().slice(0, 10)}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error("Ошибка при скачивании:", err);
+        alert(err.message || "Не удалось скачать отчёт.");
+      }
+    });
+  }
 
-  // ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ УВЕДОМЛЕНИЙ ----------
   function displayArchiveResults(errors, isSuccess) {
     if (!archiveErrorList || !archiveAlert || !archiveSuccess) return;
     archiveErrorList.innerHTML = "";
@@ -361,22 +377,141 @@
     if (reportStatusSpan) reportStatusSpan.textContent = text;
   }
 
-  // ---------- АВТОРИЗАЦИЯ (с ролью) ----------
-  if (loginBtn) {
-    loginBtn.addEventListener("click", () => {
-      const emailInput = document.getElementById("loginEmail");
-      const email = emailInput ? emailInput.value : "";
+  // Авторизация
+  const loginBtn = document.getElementById("loginBtn");
+  const registerBtn = document.getElementById("registerBtn");
+  const showRegisterBtn = document.getElementById("showRegisterBtn");
+  const showLoginBtn = document.getElementById("showLoginBtn");
+  const loginForm = document.getElementById("loginForm");
+  const registerForm = document.getElementById("registerForm");
 
-      if (email.includes("@normocontrol")) {
-        authMessage.innerHTML =
-          "✅ Вход выполнен. Роль: нормоконтролёр. Доступна база.";
+  if (showRegisterBtn) {
+    showRegisterBtn.addEventListener("click", () => {
+      loginForm.style.display = "none";
+      registerForm.style.display = "block";
+    });
+  }
+
+  if (showLoginBtn) {
+    showLoginBtn.addEventListener("click", () => {
+      registerForm.style.display = "none";
+      loginForm.style.display = "block";
+    });
+  }
+
+  if (loginBtn) {
+    loginBtn.addEventListener("click", async () => {
+      const email = document.getElementById("loginEmail").value;
+      const password = document.getElementById("loginPassword").value;
+
+      const formData = new URLSearchParams();
+      formData.append("username", email);
+      formData.append("password", password);
+
+      try {
+        const res = await fetch(CONFIG.ENDPOINTS.LOGIN, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Неверный логин или пароль");
+        }
+
+        const data = await res.json();
+        accessToken = data.access_token;
+        localStorage.setItem("access_token", accessToken);
+        localStorage.setItem("user_role", data.role);
+
         authMessage.style.color = "#1f7a4a";
-        if (adminDbLink) adminDbLink.style.display = "block";
-      } else {
-        authMessage.innerHTML = "✅ Вход выполнен. Роль: студент.";
-        authMessage.style.color = "#1f7a4a";
-        if (adminDbLink) adminDbLink.style.display = "none";
+        authMessage.textContent = `✅ Вход выполнен. Роль: ${data.role}`;
+        updateUIForAuth(data.role);
+        setTimeout(() => switchPage("page-home"), 800);
+      } catch (err) {
+        authMessage.style.color = "#b91c1c";
+        authMessage.textContent = "❌ " + err.message;
       }
     });
   }
+
+  if (registerBtn) {
+    registerBtn.addEventListener("click", async () => {
+      const email = document.getElementById("regEmail").value;
+      const username = document.getElementById("regUsername").value;
+      const password = document.getElementById("regPassword").value;
+      const role = document.getElementById("regRole").value;
+
+      try {
+        const res = await fetch(CONFIG.ENDPOINTS.REGISTER, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, username, password, role }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || "Ошибка регистрации");
+        }
+
+        regMessage.style.color = "#1f7a4a";
+        regMessage.textContent = "✅ Регистрация успешна! Теперь войдите.";
+        setTimeout(() => {
+          registerForm.style.display = "none";
+          loginForm.style.display = "block";
+          regMessage.textContent = "";
+        }, 1500);
+      } catch (err) {
+        regMessage.style.color = "#b91c1c";
+        regMessage.textContent = "❌ " + err.message;
+      }
+    });
+  }
+
+  function updateUIForAuth(role) {
+    if (authLink) authLink.style.display = "none";
+    if (logoutBtn) logoutBtn.style.display = "inline-block";
+    if (adminDbLink && role === "normocontrol")
+      adminDbLink.style.display = "inline-block";
+  }
+
+  function handleLogout() {
+    accessToken = null;
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("user_role");
+    if (authLink) authLink.style.display = "inline-block";
+    if (logoutBtn) logoutBtn.style.display = "none";
+    if (adminDbLink) adminDbLink.style.display = "none";
+    switchPage("page-auth");
+  }
+
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      handleLogout();
+    });
+  }
+
+  // Проверка сессии при загрузке страницы
+  (async function init() {
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+    try {
+      const res = await fetch(CONFIG.ENDPOINTS.ME, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const user = await res.json();
+        accessToken = token;
+        updateUIForAuth(user.role);
+      } else {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("user_role");
+      }
+    } catch (e) {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("user_role");
+    }
+  })();
 })();
