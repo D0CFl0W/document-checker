@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from database.database import get_db
 from schemas.authorized_users import FileDownloadRequest
 from services.auth import get_current_user
+from services.unpacker import build_packaged_report
 
 UPLOAD_DIR = Path("files")
 DOWNLOAD_DIR = Path("unpacked")
@@ -15,14 +16,6 @@ router = APIRouter(
     prefix="/download-report",
     tags=["Выгрузка файлов"],
 )
-
-
-def build_packaged_report(archive_path: Path, download_dir: Path, basename: str):
-    """Заглушка — замените на реальную логику"""
-    download_dir.mkdir(exist_ok=True)
-    report_path = download_dir / f"{basename}.pdf"
-    report_path.write_bytes(b"%PDF-1.4\n%EOF\n")
-    return report_path
 
 
 @router.post("")
